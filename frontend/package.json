@@ -20,6 +20,7 @@
     "react-dom": "^19.1.1",
     "react-i18next": "^16.0.0",
     "react-phone-number-input": "^3.4.12",
+    "react-qr-code": "^2.0.18",
     "react-select": "^5.10.2",
     "tailwindcss-animate": "^1.0.7",
     "three": "^0.180.0",

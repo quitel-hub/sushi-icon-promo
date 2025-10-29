@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import AdminLogin from './AdminLogin';
+import QRCode from 'react-qr-code'; // <-- ИСПРАВЛЕН ИМПОРТ
 
+// --- ИНТЕРФЕЙСЫ (из вашего файла) ---
 interface Customer {
   id: string;
   firstName: string;
@@ -18,7 +20,6 @@ interface Customer {
   discountCode: string;
   createdAt: string;
 }
-
 interface LoginSession {
   id: string;
   loginAt: string;
@@ -53,7 +54,6 @@ interface LoginSession {
   callingCode?: string;
   utcOffset?: string;
 }
-
 interface SyncedFormData {
   id: string;
   firstName: string;
@@ -70,7 +70,6 @@ interface SyncedFormData {
   timestamp: string;
   isDraft: boolean;
 }
-
 interface DeviceInfo {
   userAgent: string;
   ipAddress: string;
@@ -106,81 +105,60 @@ interface DeviceInfo {
   utcOffset?: string;
 }
 
-export const EnhancedAdminPanel: React.FC = () => {
+// --- 1. КОМПОНЕНТ ТЕПЕРЬ ПРИНИМАЕТ 'onLogout' ---
+export const EnhancedAdminPanel: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const { t } = useTranslation();
   const BRAND_IMAGE_URL = (typeof window !== 'undefined' && window.localStorage?.getItem('brandImageUrl')) || '/src/assets/sushi-icon-logo.svg';
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // --- 2. ИСПРАВЛЕННАЯ ЛОГИКА АУТЕНТИФИКАЦИИ ---
+  // Мы больше не используем 'isAuthenticated', т.к. родитель (App.tsx) решает, показывать ли нас.
+  // Нам нужен ТОЛЬКО токен.
+  const [adminToken, setAdminToken] = useState<string | null>(localStorage.getItem('adminToken'));
+  
+  // --- Состояния (из вашего файла) ---
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loginSessions, setLoginSessions] = useState<LoginSession[]>([]);
   const [currentDeviceInfo, setCurrentDeviceInfo] = useState<DeviceInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true); 
   const [lastSync, setLastSync] = useState<Date>(new Date());
   const [autoSync, setAutoSync] = useState(true);
-  const [selectedTab, setSelectedTab] = useState<'customers' | 'sessions' | 'device' | 'broadcast' | 'synced'>('customers');
+  const [selectedTab, setSelectedTab] = useState<'customers' | 'sessions' | 'device' | 'broadcast' | 'synced' | 'security'>('customers');
   const [broadcastMessage, setBroadcastMessage] = useState({ title: '', body: '' });
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [syncedFormData, setSyncedFormData] = useState<SyncedFormData[]>([]);
   const [broadcastChannel, setBroadcastChannel] = useState<'sms' | 'email'>('sms');
   const [selectedRecipients, setSelectedRecipients] = useState<string[]>([]);
+
+  // --- 3. ДОБАВЛЕНЫ СОСТОЯНИЯ ДЛЯ 2FA ---
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+  const [totpToken, setTotpToken] = useState('');
+  const [securityMessage, setSecurityMessage] = useState<string | null>(null);
+  const [securityLoading, setSecurityLoading] = useState(false);
   
-  // Проверка аутентификации при загрузке
-  useEffect(() => {
-    const checkAuth = () => {
-      const authStatus = localStorage.getItem('adminAuthenticated');
-      const loginTime = localStorage.getItem('adminLoginTime');
-      
-      console.log('Checking auth:', { authStatus, loginTime });
-      
-      if (authStatus === 'true' && loginTime) {
-        const loginDate = new Date(loginTime);
-        const now = new Date();
-        const hoursDiff = (now.getTime() - loginDate.getTime()) / (1000 * 60 * 60);
-        
-        console.log('Session check:', { loginDate, now, hoursDiff });
-        
-        // Сессия действительна 24 часа
-        if (hoursDiff < 24) {
-          console.log('Session valid, setting authenticated to true');
-          setIsAuthenticated(true);
-        } else {
-          // Сессия истекла
-          console.log('Session expired, clearing auth');
-          localStorage.removeItem('adminAuthenticated');
-          localStorage.removeItem('adminLoginTime');
-          setIsAuthenticated(false);
-        }
-      } else {
-        console.log('No valid session found');
-        setIsAuthenticated(false);
-      }
-    };
-    
-    checkAuth();
-  }, []);
-  
-  // Фильтры и поиск
+  // Фильтры и поиск (из вашего файла)
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
   const [countryFilter, setCountryFilter] = useState('all');
-  const [dateFilter, setDateFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all'); // Это нормально, что он не используется
 
-  // Автоматическая синхронизация каждые 1 секунду, без визуального мерцания
-  useEffect(() => {
-    if (!autoSync) return;
-
-    const interval = setInterval(() => {
-      // Мягкое обновление: не трогаем глобальные лоадеры, просто подменяем данные
-      fetchData();
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [autoSync, fetchData]);
-
+  // --- 4. ИСПРАВЛЕННАЯ ЛОГИКА ВЫХОДА ---
+  const handleLogout = () => {
+    onLogout(); // Вызываем функцию, которую передали из App.tsx
+  };
+  
+  // --- 5. ИСПРАВЛЕННАЯ fetchData (использует JWT) ---
   const fetchData = useCallback(async () => {
+    const token = localStorage.getItem('adminToken'); // Получаем актуальный токен
+    if (!token) {
+      console.error("fetchData: No token, logging out.");
+      handleLogout(); // Разлогиниваемся, если токена нет
+      return;
+    }
+    setAdminToken(token); // Обновляем токен в состоянии
+
     try {
-      const adminEmail = 'sushi.master.admin.2024@secure-icon.com';
       const headers = {
-        'x-owner-token': adminEmail
+        'Authorization': `Bearer ${token}` // Используем JWT
       };
 
       const [customersRes, sessionsRes, deviceRes, syncedRes] = await Promise.all([
@@ -190,51 +168,62 @@ export const EnhancedAdminPanel: React.FC = () => {
         fetch('/api/sync/form-data', { headers })
       ]);
 
-      if (customersRes.ok) {
-        const customersData = await customersRes.json();
-        setCustomers(customersData);
-      }
+      if (customersRes.ok) setCustomers(await customersRes.json());
+      if (sessionsRes.ok) setLoginSessions(await sessionsRes.json());
+      if (deviceRes.ok) setCurrentDeviceInfo(await deviceRes.json());
+      if (syncedRes.ok) setSyncedFormData(await syncedRes.json());
 
-      if (sessionsRes.ok) {
-        const sessionsData = await sessionsRes.json();
-        setLoginSessions(sessionsData);
-      }
-
-      if (deviceRes.ok) {
-        const deviceData = await deviceRes.json();
-        setCurrentDeviceInfo(deviceData);
-      }
-
-      if (syncedRes.ok) {
-        const syncedData = await syncedRes.json();
-        setSyncedFormData(syncedData);
+      // Проверка на протухший токен
+      if ([customersRes.status, sessionsRes.status, deviceRes.status, syncedRes.status].includes(401) ||
+          [customersRes.status, sessionsRes.status, deviceRes.status, syncedRes.status].includes(403)) {
+        console.error("Token expired or invalid, logging out.");
+        handleLogout();
       }
 
       setLastSync(new Date());
-    } catch (error) {
+
+    } catch (error: unknown) {
       console.error(t('admin.sync.error', { error: error instanceof Error ? error.message : String(error) }));
     } finally {
       setIsLoading(false);
     }
-  }, []);
-
+  }, [t]); // Убрали 'handleLogout' из зависимостей, чтобы избежать цикла
+  
+  // Загрузка данных при первом рендере
   useEffect(() => {
     fetchData();
-  }, [fetchData]);
+  }, [fetchData]); // Запускаем один раз
 
+  // Автосинхронизация (из вашего файла)
+  useEffect(() => {
+    if (!autoSync) return;
+    const interval = setInterval(() => {
+      fetchData(); 
+    }, 5000); // 5 секунд
+    return () => clearInterval(interval);
+  }, [autoSync, fetchData]);
+  // --- КОНЕЦ ИСПРАВЛЕНИЯ fetchData ---
+
+  // --- 6. ИСПРАВЛЕННЫЙ handleBroadcast (использует JWT) ---
   const handleBroadcast = async () => {
     if (!broadcastMessage.title.trim() || !broadcastMessage.body.trim()) return;
     if (selectedRecipients.length === 0) return;
 
+    const token = adminToken; // Берем из 'useState'
+    if (!token) {
+      alert("Admin token not found. Please re-login.");
+      handleLogout();
+      return;
+    }
+
     setIsBroadcasting(true);
     try {
-      const adminEmail = 'sushi.master.admin.2024@secure-icon.com';
       const url = broadcastChannel === 'sms' ? '/api/owner/broadcast/sms' : '/api/owner/broadcast/email';
       const response = await fetch(url, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'x-owner-token': adminEmail
+          'Authorization': `Bearer ${token}` // Используем JWT
         },
         body: JSON.stringify({
           title: broadcastMessage.title,
@@ -259,20 +248,111 @@ export const EnhancedAdminPanel: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('adminAuthenticated');
-    localStorage.removeItem('adminLoginTime');
-    setIsAuthenticated(false);
+  // --- 7. ДОБАВЛЕНЫ ФУНКЦИИ ДЛЯ 2FA ---
+  const getAdminToken = (): string | null => {
+    const token = adminToken;
+    if (!token) {
+      console.error("Admin token not found");
+      handleLogout();
+    }
+    return token;
   };
 
+  const handleEnable2FA = async () => {
+    setSecurityLoading(true);
+    setSecurityMessage(null);
+    setQrCodeUrl(null);
+    setTotpToken('');
+    
+    try {
+      const token = getAdminToken();
+      if (!token) throw new Error('Admin token not found');
+
+      const res = await fetch('/api/admin/2fa/setup', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.message || 'Failed to fetch 2FA setup data');
+
+      setQrCodeUrl(data.otpauth_url);
+      setSecurityMessage('Отсканируйте QR-код и введите 6-значный код для подтверждения.');
+
+    } catch (error: unknown) {
+      if (error instanceof Error) setSecurityMessage(`Error: ${error.message}`);
+      else setSecurityMessage('Error: An unknown error occurred');
+    }
+    setSecurityLoading(false);
+  };
+
+  const handleVerify2FA = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecurityLoading(true);
+    setSecurityMessage(null);
+
+    try {
+      const token = getAdminToken();
+      if (!token) throw new Error('Admin token not found');
+
+      const res = await fetch('/api/admin/2fa/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ token: totpToken }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Invalid token');
+
+      setSecurityMessage('УСПЕХ! Двухфакторная аутентификация (2FA) была включена.');
+      setQrCodeUrl(null);
+      setTotpToken('');
+
+    } catch (error: unknown) {
+      if (error instanceof Error) setSecurityMessage(`Error: ${error.message}`);
+      else setSecurityMessage('Error: An unknown error occurred');
+    }
+    setSecurityLoading(false);
+  };
+
+  const handleDisable2FA = async () => {
+    if (!window.confirm('Вы уверены, что хотите отключить 2FA? Это снизит безопасность вашего аккаунта.')) {
+      return;
+    }
+    
+    setSecurityLoading(true);
+    setSecurityMessage(null);
+
+    try {
+      const token = getAdminToken();
+      if (!token) throw new Error('Admin token not found');
+
+      const res = await fetch('/api/admin/2fa/disable', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to disable 2FA');
+
+      setSecurityMessage('Двухфакторная аутентификация (2FA) была отключена.');
+      setQrCodeUrl(null);
+
+    } catch (error: unknown) {
+      if (error instanceof Error) setSecurityMessage(`Error: ${error.message}`);
+      else setSecurityMessage('Error: An unknown error occurred');
+    }
+    setSecurityLoading(false);
+  };
+  // --- КОНЕЦ БЛОКА 2FA ---
+
+  // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (из вашего файла) ---
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString('ru-RU', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
   };
 
@@ -284,7 +364,7 @@ export const EnhancedAdminPanel: React.FC = () => {
     );
   };
 
-  // Функции фильтрации
+  // --- ФИЛЬТРЫ (из вашего файла) ---
   const filteredCustomers = customers.filter(customer => {
     const matchesSearch = searchTerm === '' || 
       customer.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -292,9 +372,7 @@ export const EnhancedAdminPanel: React.FC = () => {
       customer.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       customer.phoneNumber.includes(searchTerm) ||
       customer.country?.toLowerCase().includes(searchTerm.toLowerCase());
-    
     const matchesCountry = countryFilter === 'all' || customer.country === countryFilter;
-    
     return matchesSearch && matchesCountry;
   });
 
@@ -303,11 +381,9 @@ export const EnhancedAdminPanel: React.FC = () => {
       session.ipAddress?.includes(searchTerm) ||
       session.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       session.browser?.toLowerCase().includes(searchTerm.toLowerCase());
-    
     const matchesStatus = statusFilter === 'all' || 
       (statusFilter === 'success' && session.isSuccessful) ||
       (statusFilter === 'failed' && !session.isSuccessful);
-    
     return matchesSearch && matchesStatus;
   });
 
@@ -317,14 +393,12 @@ export const EnhancedAdminPanel: React.FC = () => {
       data.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       data.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
       data.phoneNumber.includes(searchTerm);
-    
     return matchesSearch;
   });
 
-  // Получаем уникальные страны для фильтра
   const uniqueCountries = Array.from(new Set(customers.map(c => c.country).filter(Boolean)));
 
-  // Статистика
+  // Статистика (из вашего файла)
   const stats = {
     totalCustomers: customers.length,
     totalSessions: loginSessions.length,
@@ -335,45 +409,31 @@ export const EnhancedAdminPanel: React.FC = () => {
     completedData: syncedFormData.filter(d => !d.isDraft).length
   };
 
-  // Если пользователь не аутентифицирован, показываем форму входа
-  if (!isAuthenticated) {
-    return <AdminLogin onLogin={setIsAuthenticated} />;
-  }
-
+  // --- 8. ГЛАВНЫЙ 'return' (весь ваш JSX сохранен) ---
   return (
     <div className="enhanced-admin-panel">
+      
       {/* Заголовок с брендингом и синхронизацией */}
       <div className="admin-header">
         <div className="admin-header__main">
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{
-                width: 64,
-                height: 64,
-                borderRadius: 12, // не круг — показываем фото как есть
-                overflow: 'hidden',
-                boxShadow: '0 8px 28px rgba(0,0,0,0.25)',
-                border: '2px solid rgba(255,255,255,0.35)'
+                width: 64, height: 64, borderRadius: 12, overflow: 'hidden',
+                boxShadow: '0 8px 28px rgba(0,0,0,0.25)', border: '2px solid rgba(255,255,255,0.35)'
               }}>
                 <img src={BRAND_IMAGE_URL} alt="Sushi Icon" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               </div>
               <div>
                 <div style={{
-                  fontSize: 28,
-                  fontWeight: 900,
-                  letterSpacing: 2,
+                  fontSize: 28, fontWeight: 900, letterSpacing: 2,
                   background: 'linear-gradient(90deg,#ff5858 0%,#f857a6 35%,#7b2ff7 70%,#00c6ff 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
+                  WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
                   textShadow: '0 3px 12px rgba(255, 80, 120, 0.35)'
                 }}>SUSHI ICON</div>
                 <div style={{
-                  marginTop: 2,
-                  fontSize: 12,
-                  letterSpacing: 3,
-                  textTransform: 'uppercase',
-                  color: 'rgba(255,255,255,0.95)',
-                  textShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                  marginTop: 2, fontSize: 12, letterSpacing: 3, textTransform: 'uppercase',
+                  color: 'rgba(255,255,255,0.95)', textShadow: '0 2px 8px rgba(0,0,0,0.3)'
                 }}>THE SUSHI AND ROLLS</div>
               </div>
             </div>
@@ -395,7 +455,7 @@ export const EnhancedAdminPanel: React.FC = () => {
             >
               {autoSync ? t('admin.sync.autoSync') : t('admin.sync.syncStopped')}
             </button>
-            <button className="sync-now" onClick={fetchData}>
+            <button className="sync-now" onClick={() => fetchData()}>
               {t('admin.sync.syncNow')}
             </button>
             <span className="last-sync">
@@ -498,7 +558,7 @@ export const EnhancedAdminPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Навигационные вкладки */}
+      {/* Навигационные вкладки (ДОБАВЛЕНА 'security') */}
       <div className="admin-tabs">
         <button 
           className={`admin-tab ${selectedTab === 'customers' ? 'active' : ''}`}
@@ -530,13 +590,21 @@ export const EnhancedAdminPanel: React.FC = () => {
         >
           {t('admin.tabs.synced', { filtered: filteredSyncedData.length, total: syncedFormData.length })}
         </button>
+        {/* --- 9. ДОБАВЛЕНА КНОПКА ВКЛАДКИ 2FA --- */}
+        <button 
+          className={`admin-tab ${selectedTab === 'security' ? 'active' : ''}`}
+          onClick={() => setSelectedTab('security')}
+        >
+          {t('admin.tabs.security', 'Безопасность (2FA)')}
+        </button>
       </div>
 
       {/* Контент вкладок */}
       <div className="admin-content">
+        
+        {/* === Вкладка 'customers' (Ваш код) === */}
         {selectedTab === 'customers' && (
           <div className="customers-section">
-            {/* Текст "Программа лояльности" в начале секции */}
             <div className="loyalty-program-section">
               <h2 className="loyalty-program-title">{t('sushi.animation.loyaltyProgram')}</h2>
             </div>
@@ -605,6 +673,7 @@ export const EnhancedAdminPanel: React.FC = () => {
           </div>
         )}
 
+        {/* === Вкладка 'sessions' (Ваш код) === */}
         {selectedTab === 'sessions' && (
           <div className="sessions-section">
             <h3>{t('admin.sessions.title')}</h3>
@@ -678,6 +747,7 @@ export const EnhancedAdminPanel: React.FC = () => {
           </div>
         )}
 
+        {/* === Вкладка 'device' (Ваш код) === */}
         {selectedTab === 'device' && currentDeviceInfo && (
           <div className="device-section">
             <h3>{t('admin.device.title')}</h3>
@@ -735,6 +805,7 @@ export const EnhancedAdminPanel: React.FC = () => {
           </div>
         )}
 
+        {/* === Вкладка 'broadcast' (Ваш код) === */}
         {selectedTab === 'broadcast' && (
           <div className="broadcast-section">
             <h3>{t('admin.broadcast.title')}</h3>
@@ -800,7 +871,6 @@ export const EnhancedAdminPanel: React.FC = () => {
               </div>
             </div>
               
-              {/* Текст "Программа лояльности" перед кнопкой рассылки */}
               <div className="loyalty-program-section">
                 <h2 className="loyalty-program-title">{t('sushi.animation.loyaltyProgram')}</h2>
               </div>
@@ -808,14 +878,15 @@ export const EnhancedAdminPanel: React.FC = () => {
             <button 
                 className="button button--primary"
                 onClick={handleBroadcast}
-              disabled={isBroadcasting || !broadcastMessage.title.trim() || !broadcastMessage.body.trim() || selectedRecipients.length===0}
+                disabled={isBroadcasting || !broadcastMessage.title.trim() || !broadcastMessage.body.trim() || selectedRecipients.length===0}
               >
                 {isBroadcasting ? t('admin.broadcast.sending') : t('admin.broadcast.sendButton')}
               </button>
             </div>
           </div>
         )}
-
+      
+        {/* === Вкладка 'synced' (Ваш код) === */}
         {selectedTab === 'synced' && (
           <div className="synced-data-section">
             <div className="section-header">
@@ -884,7 +955,81 @@ export const EnhancedAdminPanel: React.FC = () => {
             )}
           </div>
         )}
+
+        {/* --- 10. ДОБАВЛЕН КОНТЕНТ ВКЛАДКИ 2FA --- */}
+        {selectedTab === 'security' && (
+          <div className="security-section" style={{ padding: '20px' }}>
+            {/* Я использую ваши классы 'button' и 'broadcast-form', чтобы стили совпадали */}
+            <div className="broadcast-form" style={{ background: '#2C2C2C', padding: '24px', borderRadius: '8px' }}>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '16px', color: 'white' }}>
+                {t('admin.security.title', 'Безопасность (2FA)')}
+              </h3>
+              
+              {securityMessage && (
+                <p style={{ 
+                  marginBottom: '16px', 
+                  color: securityMessage.toLowerCase().startsWith('error') ? '#f87171' : '#4ade80' 
+                }}>
+                  {securityMessage}
+                </p>
+              )}
+
+              {qrCodeUrl ? (
+                <form onSubmit={handleVerify2FA}>
+                  <div style={{ background: 'white', padding: '16px', display: 'inline-block', borderRadius: '8px', marginBottom: '16px' }}>
+                    <QRCode value={qrCodeUrl} size={256} />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="totpToken" style={{ color: '#ccc' }}>
+                      {t('admin.security.code', '6-значный код')}
+                    </label>
+                    <input
+                      type="text"
+                      id="totpToken"
+                      value={totpToken}
+                      onChange={(e) => setTotpToken(e.target.value)}
+                      maxLength={6}
+                      className="form-input" // Использую ваш класс
+                      style={{ maxWidth: '320px' }}
+                      autoComplete="one-time-code"
+                      autoFocus
+                      required
+                    />
+                  </div>
+                  <button 
+                    type="submit" 
+                    disabled={securityLoading} 
+                    className="button button--blue" // Использую ваш класс
+                  >
+                    {securityLoading ? t('admin.auth.verifying') : t('admin.auth.verifyButton')}
+                  </button>
+                </form>
+              ) : (
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  <button 
+                    onClick={handleEnable2FA} 
+                    disabled={securityLoading} 
+                    className="button button--green" // Использую ваш класс
+                  >
+                    {securityLoading ? t('admin.loading') : t('admin.security.enable', 'Включить 2FA')}
+                  </button>
+                  
+                  <button 
+                    onClick={handleDisable2FA} 
+                    disabled={securityLoading} 
+                    className="button button--red" // Добавляю класс (если есть)
+                    style={{ background: '#ef4444' }} // Запасной стиль для красной кнопки
+                  >
+                    {securityLoading ? t('admin.loading') : t('admin.security.disable', 'Отключить 2FA')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
+
+export default EnhancedAdminPanel;

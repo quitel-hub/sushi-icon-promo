@@ -10,13 +10,19 @@ import { UAParser } from "ua-parser-js";
 import geoip from "geoip-lite";
 import https from "https";
 import http from "http";
-
+import { sendPromotionalEmail } from './services/emailService.js';
+import speakeasy from 'speakeasy';
+import jwt from 'jsonwebtoken';
 dotenv.config();
 
 const app = express();
 const prisma = new PrismaClient();
 
 const OWNER_TOKEN = process.env.OWNER_TOKEN;
+
+// const __filename = fileURLToPath(import.meta.url);
+// const __dirname = path.dirname(__filename);
+
 
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
@@ -946,77 +952,307 @@ const ADMIN_CREDENTIALS = {
   name: "Главный администратор"
 };
 
-// Аутентификация владельца
+// // Аутентификация владельца
+// app.post("/api/owner/login", async (req, res) => {
+//   try {
+//     const { email, accessCode, password } = ownerLoginSchema.parse(req.body);
+
+//     // Получаем информацию об устройстве и местоположении
+//     const deviceInfo = await getDeviceAndLocationInfo(req);
+
+//     // Проверяем только жестко заданные данные
+//     if (email !== ADMIN_CREDENTIALS.email || 
+//         accessCode !== ADMIN_CREDENTIALS.accessCode || 
+//         password !== ADMIN_CREDENTIALS.password) {
+      
+//       // Создаем или находим владельца в базе данных для неудачной попытки
+//       let owner;
+//       try {
+//         owner = await prisma.owner.upsert({
+//           where: { email: ADMIN_CREDENTIALS.email },
+//           update: {},
+//           create: {
+//             id: "admin-001",
+//             email: ADMIN_CREDENTIALS.email,
+//             name: ADMIN_CREDENTIALS.name,
+//             accessCode: ADMIN_CREDENTIALS.accessCode,
+//             password: ADMIN_CREDENTIALS.password,
+//           },
+//         });
+//       } catch (ownerError) {
+//         console.error("Ошибка при создании/обновлении владельца для неудачной попытки:", ownerError);
+//       }
+
+//       // Сохраняем неудачную попытку входа с детальной информацией
+//       try {
+//         await prisma.ownerLoginSession.create({
+//           data: {
+//             ownerId: owner?.id || "admin-001",
+//             deviceInfo: JSON.stringify(deviceInfo),
+//             ipAddress: deviceInfo.ipAddress,
+//             location: deviceInfo.location,
+//             userAgent: deviceInfo.userAgent,
+//             browser: deviceInfo.browser,
+//             os: deviceInfo.os,
+//             device: deviceInfo.device,
+//             country: deviceInfo.country,
+//             city: deviceInfo.city,
+//             latitude: deviceInfo.latitude,
+//             longitude: deviceInfo.longitude,
+//             isSuccessful: false,
+//             loginAt: new Date(),
+//             timezone: deviceInfo.timezone,
+//             isp: deviceInfo.isp,
+//             region: deviceInfo.region,
+//             deviceType: deviceInfo.deviceType,
+//             deviceModel: deviceInfo.deviceModel,
+//             browserName: deviceInfo.browserName,
+//             browserVersion: deviceInfo.browserVersion,
+//             osName: deviceInfo.osName,
+//             osVersion: deviceInfo.osVersion,
+//             countryCode: deviceInfo.countryCode,
+//             regionCode: deviceInfo.regionCode,
+//             postal: deviceInfo.postal,
+//             currency: deviceInfo.currency,
+//             currencyName: deviceInfo.currencyName,
+//             languages: deviceInfo.languages,
+//             countryPopulation: deviceInfo.countryPopulation,
+//             countryArea: deviceInfo.countryArea,
+//             countryCapital: deviceInfo.countryCapital,
+//             continent: deviceInfo.continent,
+//             isEu: deviceInfo.isEu,
+//             callingCode: deviceInfo.callingCode,
+//             utcOffset: deviceInfo.utcOffset,
+//           },
+//         });
+//         // Если пароль верный, ПРОВЕРЯЕМ 2FA
+//     if (owner.totpEnabled) {
+//       // 2FA включена!
+//       // НЕ ВЫДАЕМ ТОКЕН. Отправляем сигнал "Нужен 2FA код".
+//       // (Обновляем сессию, что пароль был верный, но 2FA еще не пройдена)
+//       // ... (ваша логика обновления сессии)
+
+//       res.status(200).json({
+//         needs2FA: true,
+//         message: 'Password correct. Please provide 2FA token.'
+//       });
+
+//     } else {
+//       // 2FA ВЫКЛЮЧЕНА.
+//       // Все как обычно: выдаем JWT-токен и входим.
+//       const jwtPayload = { id: owner.id, username: owner.username };
+//       const token = jwt.sign(jwtPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+
+//       // (Тут ваша логика записи УСПЕШНОЙ сессии - оставьте ее)
+//       // await prisma.ownerLoginSession.update({ ... });
+
+//       res.json({
+//         message: 'Login successful',
+//         token: token,
+//         owner: { id: owner.id, username: owner.username },
+//       });
+//     }
+//       } catch (sessionError) {
+//         console.error("Ошибка при сохранении неудачной сессии:", sessionError);
+//       }
+
+//       return res.status(401).json({ 
+//         message: "Доступ запрещен. Эта страница доступна только администраторам.",
+//         success: false 
+//       });
+//     }
+
+//       // Создаем или находим владельца в базе данных
+//       let owner;
+//       try {
+//         owner = await prisma.owner.upsert({
+//           where: { email: ADMIN_CREDENTIALS.email },
+//           update: {
+//             lastLogin: new Date(),
+//           },
+//           create: {
+//             id: "admin-001",
+//             email: ADMIN_CREDENTIALS.email,
+//             name: ADMIN_CREDENTIALS.name,
+//             accessCode: ADMIN_CREDENTIALS.accessCode,
+//             password: ADMIN_CREDENTIALS.password,
+//             lastLogin: new Date(),
+//           },
+//         });
+//       } catch (ownerError) {
+//         console.error("Ошибка при создании/обновлении владельца:", ownerError);
+//       }
+
+//       // Сохраняем успешную сессию входа с детальной информацией
+//       try {
+//         await prisma.ownerLoginSession.create({
+//           data: {
+//             ownerId: owner?.id || "admin-001",
+//             deviceInfo: JSON.stringify(deviceInfo),
+//             ipAddress: deviceInfo.ipAddress,
+//             location: deviceInfo.location,
+//             userAgent: deviceInfo.userAgent,
+//             browser: deviceInfo.browser,
+//             os: deviceInfo.os,
+//             device: deviceInfo.device,
+//             country: deviceInfo.country,
+//             city: deviceInfo.city,
+//             latitude: deviceInfo.latitude,
+//             longitude: deviceInfo.longitude,
+//             isSuccessful: true,
+//             loginAt: new Date(),
+//             timezone: deviceInfo.timezone,
+//             isp: deviceInfo.isp,
+//             region: deviceInfo.region,
+//             deviceType: deviceInfo.deviceType,
+//             deviceModel: deviceInfo.deviceModel,
+//             browserName: deviceInfo.browserName,
+//             browserVersion: deviceInfo.browserVersion,
+//             osName: deviceInfo.osName,
+//             osVersion: deviceInfo.osVersion,
+//             countryCode: deviceInfo.countryCode,
+//             regionCode: deviceInfo.regionCode,
+//             postal: deviceInfo.postal,
+//             currency: deviceInfo.currency,
+//             currencyName: deviceInfo.currencyName,
+//             languages: deviceInfo.languages,
+//             countryPopulation: deviceInfo.countryPopulation,
+//             countryArea: deviceInfo.countryArea,
+//             countryCapital: deviceInfo.countryCapital,
+//             continent: deviceInfo.continent,
+//             isEu: deviceInfo.isEu,
+//             callingCode: deviceInfo.callingCode,
+//             utcOffset: deviceInfo.utcOffset,
+//           },
+//         });
+//       } catch (sessionError) {
+//         console.error("Ошибка при сохранении сессии:", sessionError);
+//       }
+
+//     // Если данные верные, возвращаем профиль администратора
+//     return res.status(200).json({
+//       message: "Успешная аутентификация.",
+//       success: true,
+//       owner: {
+//         id: "admin-001",
+//         email: ADMIN_CREDENTIALS.email,
+//         name: ADMIN_CREDENTIALS.name,
+//         lastLogin: new Date().toISOString(),
+//         createdAt: new Date().toISOString(),
+//       },
+//       deviceInfo: {
+//         browser: deviceInfo.browser,
+//         browserName: deviceInfo.browserName,
+//         browserVersion: deviceInfo.browserVersion,
+//         os: deviceInfo.os,
+//         osName: deviceInfo.osName,
+//         osVersion: deviceInfo.osVersion,
+//         device: deviceInfo.device,
+//         deviceType: deviceInfo.deviceType,
+//         deviceModel: deviceInfo.deviceModel,
+//         location: deviceInfo.location,
+//         country: deviceInfo.country,
+//         city: deviceInfo.city,
+//         region: deviceInfo.region,
+//         latitude: deviceInfo.latitude,
+//         longitude: deviceInfo.longitude,
+//         timezone: deviceInfo.timezone,
+//         isp: deviceInfo.isp,
+//         ipAddress: deviceInfo.ipAddress,
+//         userAgent: deviceInfo.userAgent,
+//         // Дополнительные данные из внешнего API
+//         countryCode: deviceInfo.countryCode,
+//         regionCode: deviceInfo.regionCode,
+//         postal: deviceInfo.postal,
+//         currency: deviceInfo.currency,
+//         currencyName: deviceInfo.currencyName,
+//         languages: deviceInfo.languages,
+//         countryPopulation: deviceInfo.countryPopulation,
+//         countryArea: deviceInfo.countryArea,
+//         countryCapital: deviceInfo.countryCapital,
+//         continent: deviceInfo.continent,
+//         isEu: deviceInfo.isEu,
+//         callingCode: deviceInfo.callingCode,
+//         utcOffset: deviceInfo.utcOffset,
+//       },
+//     });
+//   } catch (error) {
+//     if (error instanceof z.ZodError) {
+//       return res.status(400).json({ 
+//         message: "Некорректные данные.", 
+//         errors: error.flatten(),
+//         success: false 
+//       });
+//     }
+// // Middleware для аутентификации владельца (Админа)
+// const authenticateOwnerToken = (req, res, next) => {
+//   const authHeader = req.headers['authorization'];
+//   const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+//   if (token == null) {
+//     return res.status(401).json({ message: 'No token provided' }); // Нет токена
+//   }
+
+//   jwt.verify(token, process.env.JWT_SECRET, (err, owner) => {
+//     if (err) {
+//       return res.status(403).json({ message: 'Invalid token' }); // Неверный токен
+//     }
+
+//     // Добавляем данные админа в запрос
+//     req.owner = owner; 
+//     next(); // Переходим к следующему обработчику
+//   });
+// };
+//     console.error(error);
+//     return res.status(500).json({ 
+//       message: "Ошибка сервера при аутентификации.",
+//       success: false 
+//     });
+//   }
+// });
+// --- 🔐 ИСПРАВЛЕННЫЙ ЭНДПОИНТ ЛОГИНА АДМИНА ---
 app.post("/api/owner/login", async (req, res) => {
   try {
     const { email, accessCode, password } = ownerLoginSchema.parse(req.body);
 
-    // Получаем информацию об устройстве и местоположении
+    // Получаем информацию об устройстве
     const deviceInfo = await getDeviceAndLocationInfo(req);
 
-    // Проверяем только жестко заданные данные
+    // --- НАЧАЛО: Логика НЕУДАЧНОГО входа ---
     if (email !== ADMIN_CREDENTIALS.email || 
         accessCode !== ADMIN_CREDENTIALS.accessCode || 
         password !== ADMIN_CREDENTIALS.password) {
       
-      // Создаем или находим владельца в базе данных для неудачной попытки
-      let owner;
-      try {
-        owner = await prisma.owner.upsert({
-          where: { email: ADMIN_CREDENTIALS.email },
-          update: {},
-          create: {
-            id: "admin-001",
-            email: ADMIN_CREDENTIALS.email,
-            name: ADMIN_CREDENTIALS.name,
-            accessCode: ADMIN_CREDENTIALS.accessCode,
-            password: ADMIN_CREDENTIALS.password,
-          },
-        });
-      } catch (ownerError) {
-        console.error("Ошибка при создании/обновлении владельца для неудачной попытки:", ownerError);
-      }
+      console.log("Failed login attempt"); // Лог
+      
+      // Находим/создаем 'owner' для записи лога
+      // (Мы используем upsert, чтобы в базе всегда был 'admin-001' для связи)
+      const owner = await prisma.owner.upsert({
+        where: { email: ADMIN_CREDENTIALS.email },
+        update: {},
+        create: {
+          id: "admin-001",
+          email: ADMIN_CREDENTIALS.email,
+          name: ADMIN_CREDENTIALS.name,
+          accessCode: ADMIN_CREDENTIALS.accessCode, // !! ПЛОХАЯ ПРАКТИКА !!
+          password: ADMIN_CREDENTIALS.password, // !! ПЛОХАЯ ПРАКТИКА !!
+        },
+      });
 
-      // Сохраняем неудачную попытку входа с детальной информацией
+      // Сохраняем неудачную попытку входа
       try {
         await prisma.ownerLoginSession.create({
           data: {
-            ownerId: owner?.id || "admin-001",
-            deviceInfo: JSON.stringify(deviceInfo),
+            ownerId: owner.id,
+            isSuccessful: false,
+            loginAt: new Date(),
             ipAddress: deviceInfo.ipAddress,
             location: deviceInfo.location,
             userAgent: deviceInfo.userAgent,
-            browser: deviceInfo.browser,
-            os: deviceInfo.os,
-            device: deviceInfo.device,
+            // ... (все остальные ваши поля deviceInfo) ...
             country: deviceInfo.country,
             city: deviceInfo.city,
-            latitude: deviceInfo.latitude,
-            longitude: deviceInfo.longitude,
-            isSuccessful: false,
-            loginAt: new Date(),
-            timezone: deviceInfo.timezone,
-            isp: deviceInfo.isp,
-            region: deviceInfo.region,
-            deviceType: deviceInfo.deviceType,
-            deviceModel: deviceInfo.deviceModel,
-            browserName: deviceInfo.browserName,
-            browserVersion: deviceInfo.browserVersion,
-            osName: deviceInfo.osName,
-            osVersion: deviceInfo.osVersion,
-            countryCode: deviceInfo.countryCode,
-            regionCode: deviceInfo.regionCode,
-            postal: deviceInfo.postal,
-            currency: deviceInfo.currency,
-            currencyName: deviceInfo.currencyName,
-            languages: deviceInfo.languages,
-            countryPopulation: deviceInfo.countryPopulation,
-            countryArea: deviceInfo.countryArea,
-            countryCapital: deviceInfo.countryCapital,
-            continent: deviceInfo.continent,
-            isEu: deviceInfo.isEu,
-            callingCode: deviceInfo.callingCode,
-            utcOffset: deviceInfo.utcOffset,
+            // ... (и т.д.)
           },
         });
       } catch (sessionError) {
@@ -1028,137 +1264,107 @@ app.post("/api/owner/login", async (req, res) => {
         success: false 
       });
     }
+    // --- КОНЕЦ: Логика НЕУДАЧНОГО входа ---
 
-      // Создаем или находим владельца в базе данных
-      let owner;
-      try {
-        owner = await prisma.owner.upsert({
-          where: { email: ADMIN_CREDENTIALS.email },
-          update: {
-            lastLogin: new Date(),
-          },
-          create: {
-            id: "admin-001",
-            email: ADMIN_CREDENTIALS.email,
-            name: ADMIN_CREDENTIALS.name,
-            accessCode: ADMIN_CREDENTIALS.accessCode,
-            password: ADMIN_CREDENTIALS.password,
-            lastLogin: new Date(),
-          },
-        });
-      } catch (ownerError) {
-        console.error("Ошибка при создании/обновлении владельца:", ownerError);
-      }
 
-      // Сохраняем успешную сессию входа с детальной информацией
-      try {
-        await prisma.ownerLoginSession.create({
-          data: {
-            ownerId: owner?.id || "admin-001",
-            deviceInfo: JSON.stringify(deviceInfo),
-            ipAddress: deviceInfo.ipAddress,
-            location: deviceInfo.location,
-            userAgent: deviceInfo.userAgent,
-            browser: deviceInfo.browser,
-            os: deviceInfo.os,
-            device: deviceInfo.device,
-            country: deviceInfo.country,
-            city: deviceInfo.city,
-            latitude: deviceInfo.latitude,
-            longitude: deviceInfo.longitude,
-            isSuccessful: true,
-            loginAt: new Date(),
-            timezone: deviceInfo.timezone,
-            isp: deviceInfo.isp,
-            region: deviceInfo.region,
-            deviceType: deviceInfo.deviceType,
-            deviceModel: deviceInfo.deviceModel,
-            browserName: deviceInfo.browserName,
-            browserVersion: deviceInfo.browserVersion,
-            osName: deviceInfo.osName,
-            osVersion: deviceInfo.osVersion,
-            countryCode: deviceInfo.countryCode,
-            regionCode: deviceInfo.regionCode,
-            postal: deviceInfo.postal,
-            currency: deviceInfo.currency,
-            currencyName: deviceInfo.currencyName,
-            languages: deviceInfo.languages,
-            countryPopulation: deviceInfo.countryPopulation,
-            countryArea: deviceInfo.countryArea,
-            countryCapital: deviceInfo.countryCapital,
-            continent: deviceInfo.continent,
-            isEu: deviceInfo.isEu,
-            callingCode: deviceInfo.callingCode,
-            utcOffset: deviceInfo.utcOffset,
-          },
-        });
-      } catch (sessionError) {
-        console.error("Ошибка при сохранении сессии:", sessionError);
-      }
+    // --- НАЧАЛО: Логика УСПЕШНОГО входа (Пароль верный) ---
 
-    // Если данные верные, возвращаем профиль администратора
-    return res.status(200).json({
-      message: "Успешная аутентификация.",
-      success: true,
-      owner: {
+    // Пароль верный. Теперь нам нужен 'owner' из БД, чтобы проверить 2FA.
+    // Мы используем upsert, чтобы гарантировать его существование.
+    const owner = await prisma.owner.upsert({
+      where: { email: ADMIN_CREDENTIALS.email },
+      update: {
+        lastLogin: new Date(),
+      },
+      create: {
         id: "admin-001",
         email: ADMIN_CREDENTIALS.email,
         name: ADMIN_CREDENTIALS.name,
-        lastLogin: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-      },
-      deviceInfo: {
-        browser: deviceInfo.browser,
-        browserName: deviceInfo.browserName,
-        browserVersion: deviceInfo.browserVersion,
-        os: deviceInfo.os,
-        osName: deviceInfo.osName,
-        osVersion: deviceInfo.osVersion,
-        device: deviceInfo.device,
-        deviceType: deviceInfo.deviceType,
-        deviceModel: deviceInfo.deviceModel,
-        location: deviceInfo.location,
-        country: deviceInfo.country,
-        city: deviceInfo.city,
-        region: deviceInfo.region,
-        latitude: deviceInfo.latitude,
-        longitude: deviceInfo.longitude,
-        timezone: deviceInfo.timezone,
-        isp: deviceInfo.isp,
-        ipAddress: deviceInfo.ipAddress,
-        userAgent: deviceInfo.userAgent,
-        // Дополнительные данные из внешнего API
-        countryCode: deviceInfo.countryCode,
-        regionCode: deviceInfo.regionCode,
-        postal: deviceInfo.postal,
-        currency: deviceInfo.currency,
-        currencyName: deviceInfo.currencyName,
-        languages: deviceInfo.languages,
-        countryPopulation: deviceInfo.countryPopulation,
-        countryArea: deviceInfo.countryArea,
-        countryCapital: deviceInfo.countryCapital,
-        continent: deviceInfo.continent,
-        isEu: deviceInfo.isEu,
-        callingCode: deviceInfo.callingCode,
-        utcOffset: deviceInfo.utcOffset,
+        accessCode: ADMIN_CREDENTIALS.accessCode,
+        password: ADMIN_CREDENTIALS.password,
+        lastLogin: new Date(),
+        totpEnabled: false, // По умолчанию 2FA выключена (важно для 'create')
       },
     });
+
+    // Сохраняем УСПЕШНУЮ сессию (Шаг 1 пройден)
+    try {
+      await prisma.ownerLoginSession.create({
+        data: {
+          ownerId: owner.id,
+          isSuccessful: true, // Пароль верный
+          loginAt: new Date(),
+          ipAddress: deviceInfo.ipAddress,
+          location: deviceInfo.location,
+          // ... (все остальные ваши поля deviceInfo) ...
+          country: deviceInfo.country,
+          city: deviceInfo.city,
+          // ... (и т.д.)
+        },
+      });
+    } catch (sessionError) {
+      console.error("Ошибка при сохранении успешной сессии:", sessionError);
+    }
+
+
+    // --- ГЛАВНАЯ ПРОВЕРКА 2FA ---
+    
+    // Теперь, когда пароль верный, проверяем 2FA
+    if (owner.totpEnabled) {
+      // 2FA включена! НЕ ВЫДАЕМ ТОКЕН.
+      // Отправляем сигнал "Нужен 2FA код".
+      console.log(`2FA required for user: ${owner.email}`);
+      return res.status(200).json({
+        needs2FA: true,
+        message: 'Password correct. Please provide 2FA token.'
+      });
+
+    } else {
+      // 2FA ВЫКЛЮЧЕНА.
+      // Все как обычно: выдаем JWT-токен и входим.
+      console.log(`Login successful (2FA disabled) for user: ${owner.email}`);
+      
+      // Создаем JWT-токен
+      const jwtPayload = { id: owner.id, email: owner.email, name: owner.name };
+      const token = jwt.sign(jwtPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+
+      // Возвращаем токен и данные (вместо старого 'success: true')
+      return res.json({
+        message: 'Login successful',
+        success: true,
+        token: token, // <-- ВАШ ТОКЕН
+        owner: { id: owner.id, email: owner.email, name: owner.name },
+        deviceInfo: {
+            browser: deviceInfo.browser,
+            browserName: deviceInfo.browserName,
+            // ... (все остальные ваши поля deviceInfo) ...
+            utcOffset: deviceInfo.utcOffset,
+        }
+      });
+    }
+    // --- КОНЕЦ: Логика УСПЕШНОГО входа ---
+
   } catch (error) {
-    if (error instanceof z.ZodError) {
+    if (error instanceof z.ZodError) { // Вы используете Zod, это отлично!
       return res.status(400).json({ 
         message: "Некорректные данные.", 
         errors: error.flatten(),
         success: false 
       });
     }
-
-    console.error(error);
+    console.error("Критическая ошибка в /api/owner/login:", error);
     return res.status(500).json({ 
       message: "Ошибка сервера при аутентификации.",
       success: false 
     });
   }
-});
+}); // <-- ЗДЕСЬ ЭНДПОИНТ ЗАКРЫВАЕТСЯ
+
+//
+// --- authenticateOwnerToken ДОЛЖЕН БЫТЬ СНАРУЖИ! ---
+//
+// Middleware для аутентификации владельца (Админа)
+// (Он используется вашими ДРУГИМИ эндпоинтами, например, рассылкой)
 
 // Получение информации о владельце
 app.get("/api/owner/profile", async (req, res) => {
@@ -1833,6 +2039,244 @@ app.post("/api/owner/broadcast/email", async (req, res) => {
     return res.status(500).json({ message: "Ошибка сервера при Email рассылке." });
   }
 });
+
+const authenticateOwnerToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (token == null) {
+    return res.status(401).json({ message: 'No token provided' }); // Нет токена
+  }
+
+  // Убедитесь, что JWT_SECRET задан в вашем .env
+  if (!process.env.JWT_SECRET) {
+     console.error('JWT_SECRET is not defined in .env!');
+     return res.status(500).json({ message: 'Server configuration error' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, owner) => {
+    if (err) {
+      console.error('JWT Error:', err.message);
+      return res.status(403).json({ message: 'Invalid token' }); // Неверный токен
+    }
+
+    // Добавляем данные админа в запрос
+    req.owner = owner; 
+    next(); // Переходим к следующему обработчику
+  });
+};
+// --- Эндпоинт для Email-рассылки (ЗАЩИЩЕННЫЙ) ---
+app.post('/api/admin/broadcast/email', authenticateOwnerToken, async (req, res) => {
+  // 1. Проверяем, что это точно админ (хотя middleware это уже сделал)
+  if (!req.owner) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+
+  // 2. Получаем данные из админки
+  const { subject, htmlBody } = req.body;
+
+  if (!subject || !htmlBody) {
+    return res.status(400).json({ message: 'Subject and htmlBody are required' });
+  }
+
+  console.log(`Starting email broadcast: "${subject}"`);
+
+  try {
+    // 3. Находим ВСЕХ пользователей, кто дал согласие на рассылку
+    const usersToEmail = await prisma.user.findMany({
+      where: {
+        consentPromotional: true, // !! Ключевой фильтр !!
+        email: {
+          not: null, // Убедимся, что email есть
+        },
+      },
+      select: {
+        email: true,
+      }
+    });
+
+    if (usersToEmail.length === 0) {
+      return res.status(200).json({ message: 'Broadcast started, but no users found with consent.' });
+    }
+
+    // 4. Готовим все обещания (promises) для отправки
+    const emailPromises = usersToEmail.map(user => 
+      sendPromotionalEmail(user.email, subject, htmlBody)
+    );
+
+    // 5. Запускаем отправку ПАРАЛЛЕЛЬНО
+    // Promise.allSettled ждет, пока ВСЕ выполнятся (успешно или с ошибкой)
+    const results = await Promise.allSettled(emailPromises);
+
+    // 6. Считаем статистику
+    const successfulSends = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+    const failedSends = results.length - successfulSends;
+
+    console.log(`Broadcast finished. Sent: ${successfulSends}, Failed: ${failedSends}`);
+
+    res.status(200).json({ 
+      message: `Broadcast complete!`,
+      totalAttempted: usersToEmail.length,
+      successful: successfulSends,
+      failed: failedSends,
+    });
+
+  } catch (error) {
+    console.error('Failed during broadcast preparation:', error);
+    res.status(500).json({ message: 'Server error during broadcast', error: error.message });
+  }
+});
+
+// --- 🔐 НАЧАЛО БЛОКА 2FA ---
+
+// 1. ПОЛУЧЕНИЕ QR-КОДА (Защищено)
+// Генерирует секрет и QR-код для сканирования
+app.get('/api/admin/2fa/setup', authenticateOwnerToken, async (req, res) => {
+  try {
+    const ownerId = req.owner.id; // Получаем ID из токена
+
+    // Генерируем новый секрет 2FA
+    const secret = speakeasy.generateSecret({
+      length: 20,
+      name: `SushiIconAdmin (${req.owner.username})`, // Так будет видно в приложении
+    });
+
+    // secret.otpauth_url - это ссылка для QR-кода
+    // secret.base32 - это сам секрет, его мы храним
+
+    // ВРЕМЕННО сохраняем секрет в базу, но 2FA еще НЕ включена
+    await prisma.owner.update({
+      where: { id: ownerId },
+      data: {
+        totpSecret: secret.base32, // Сохраняем 'AGSDEY...'
+        totpEnabled: false, // 2FA еще не подтверждена
+      },
+    });
+
+    // Отправляем ссылку для QR-кода на фронтенд
+    res.json({
+      otpauth_url: secret.otpauth_url,
+      secret_base32: secret.base32, // Для ручного ввода
+    });
+
+  } catch (error) {
+    console.error('2FA setup error:', error);
+    res.status(500).json({ message: 'Error generating 2FA secret' });
+  }
+});
+
+
+// 2. ПРОВЕРКА И ВКЛЮЧЕНИЕ 2FA (Защищено)
+// Админ сканирует QR-код, вводит 6 цифр, и мы их проверяем
+app.post('/api/admin/2fa/verify', authenticateOwnerToken, async (req, res) => {
+  const { token } = req.body; // 6-значный код из приложения
+  const ownerId = req.owner.id;
+
+  if (!token) {
+    return res.status(400).json({ message: 'Token is required' });
+  }
+
+  try {
+    const owner = await prisma.owner.findUnique({ where: { id: ownerId } });
+
+    if (!owner || !owner.totpSecret) {
+      return res.status(400).json({ message: '2FA secret not found. Please setup again.' });
+    }
+
+    // Проверяем 6-значный код
+    const isValid = speakeasy.totp.verify({
+      secret: owner.totpSecret,
+      encoding: 'base32',
+      token: token,
+      window: 1, // Допуск в 1 "окно" (30 сек)
+    });
+
+    if (isValid) {
+      // Код верный! Включаем 2FA для админа
+      await prisma.owner.update({
+        where: { id: ownerId },
+        data: { totpEnabled: true }, // <-- Включаем!
+      });
+      res.json({ success: true, message: '2FA enabled successfully!' });
+    } else {
+      // Код неверный
+      res.status(400).json({ success: false, message: 'Invalid token' });
+    }
+  } catch (error) {
+    console.error('2FA verify error:', error);
+    res.status(500).json({ message: 'Error verifying 2FA token' });
+  }
+});
+
+
+// 3. ОТКЛЮЧЕНИЕ 2FA (Защищено)
+// Эндпоинт для выключения 2FA (например, в настройках)
+app.post('/api/admin/2fa/disable', authenticateOwnerToken, async (req, res) => {
+  try {
+    await prisma.owner.update({
+      where: { id: req.owner.id },
+      data: {
+        totpEnabled: false,
+        totpSecret: null,
+      },
+    });
+    res.json({ success: true, message: '2FA disabled successfully.' });
+  } catch (error) {
+    console.error('2FA disable error:', error);
+    res.status(500).json({ message: 'Error disabling 2FA' });
+  }
+});
+
+
+// 4. ВХОД, ШАГ 2: ПРОВЕРКА 2FA (НЕ защищено)
+// Сюда отправляется 6-значный код ПОСЛЕ ввода пароля
+app.post('/api/admin/2fa/login', async (req, res) => {
+  const { username, token } = req.body;
+
+  if (!username || !token) {
+    return res.status(400).json({ message: 'Username and token are required' });
+  }
+
+  try {
+    const owner = await prisma.owner.findUnique({ where: { username } });
+
+    if (!owner || !owner.totpEnabled || !owner.totpSecret) {
+      return res.status(401).json({ message: '2FA not enabled for this user' });
+    }
+
+    // Проверяем 6-значный код
+    const isValid = speakeasy.totp.verify({
+      secret: owner.totpSecret,
+      encoding: 'base32',
+      token: token,
+      window: 1,
+    });
+
+    if (isValid) {
+      // КОД ВЕРНЫЙ! 
+      // Теперь мы можем выдать ему JWT-токен и войти
+      const jwtPayload = { id: owner.id, username: owner.username };
+      const jwtToken = jwt.sign(jwtPayload, process.env.JWT_SECRET, { expiresIn: '1d' });
+
+      // (Можно также записать сессию, как вы делали в /login)
+
+      res.json({
+        message: 'Login successful',
+        token: jwtToken,
+        owner: { id: owner.id, username: owner.username },
+      });
+
+    } else {
+      // Код неверный
+      res.status(401).json({ message: 'Invalid 2FA token' });
+    }
+  } catch (error) {
+    console.error('2FA login error:', error);
+    res.status(500).json({ message: 'Server error during 2FA login' });
+  }
+});
+
+// --- 🔐 КОНЕЦ БЛОКА 2FA ---
 
 const PORT = process.env.PORT || 3000;
 

@@ -53,6 +53,10 @@ model Owner {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   loginSessions OwnerLoginSession[]
+
+  totpSecret  String?  // Секрет 2FA в base32
+  totpEnabled Boolean  @default(false) // Включена ли 2FA
+
 }
 
 model MessageSubscription {
@@ -110,7 +114,7 @@ model OwnerLoginSession {
   region      String?  // Регион
   deviceType  String?  // Тип устройства
   deviceModel String?  // Модель устройства
-  browserName String?  // Название браузера
+  browserName String?  // Название браузера 
   browserVersion String? // Версия браузера
   osName      String?  // Название ОС
   osVersion   String?  // Версия ОС
