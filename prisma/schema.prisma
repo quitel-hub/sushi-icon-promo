@@ -20,6 +20,14 @@ model Customer {
   lastName      String
   phoneNumber   String   @unique
   email         String?
+  isVerified             Boolean   @default(false) // Общий статус: Phone + Email верифицированы
+  phoneVerificationCode  String?   // Код для SMS
+  emailVerificationCode  String?   // Код для Email
+  isPhoneVerified        Boolean   @default(false) // Статус верификации телефона
+  isEmailVerified        Boolean   @default(false) // Статус верификации email
+  consentEmail           Boolean   @default(false) // Явное согласие на рассылку Email (GDPR)
+  consentSms             Boolean   @default(false) // Явное согласие на рассылку SMS (GDPR)
+  consentGivenAt         DateTime? // Время, когда было дано согласие
   birthDate     DateTime?
   city          String?
   street        String?

@@ -33,6 +33,64 @@ const mailTransporter = smtpEnabled
     })
   : null;
 
+  // ... после настройки twilioClient и mailTransporter
+
+// ===================================================
+// === ФУНКЦИИ ВЕРИФИКАЦИИ ===
+// ===================================================
+
+/**
+ * Генерирует 4-значный цифровой код.
+ * @returns {string} Четырехзначный код
+ */
+function generateVerificationCode() {
+  // Генерация случайного числа от 1000 до 9999
+  return crypto.randomInt(1000, 10000).toString();
+}
+
+/**
+ * Отправляет код верификации по SMS или Email.
+ * @param {string} type - 'phone' или 'email'
+ * @param {string} recipient - номер телефона или email
+ * @param {string} code - 4-значный код
+ * @returns {Promise<void>}
+ */
+async function sendVerificationCode(type, recipient, code) {
+  const subject = "Ваш код подтверждения для Sushi Icon";
+  const body = `Ваш код подтверждения: ${code}. Используйте его для завершения регистрации.`;
+
+  if (type === 'phone') {
+    if (!twilioClient || !process.env.TWILIO_MESSAGING_SERVICE_SID) {
+      console.error("Server: SMS отправка не настроена.");
+      throw new Error("SMS_NOT_CONFIGURED");
+    }
+    
+    // Twilio (используем уже настроенный twilioClient)
+    await twilioClient.messages.create({
+      to: recipient,
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+      body: body,
+    });
+    console.log(`Server: SMS с кодом отправлен на ${recipient}`);
+    
+  } else if (type === 'email') {
+    if (!mailTransporter || !process.env.SMTP_FROM) {
+      console.error("Server: Email отправка не настроена.");
+      throw new Error("EMAIL_NOT_CONFIGURED");
+    }
+
+    // Nodemailer (используем уже настроенный mailTransporter)
+    await mailTransporter.sendMail({
+      from: process.env.SMTP_FROM,
+      to: recipient,
+      subject: subject,
+      text: body,
+      html: `<p>${body}</p><p>Код действителен в течение 5 минут.</p>`,
+    });
+    console.log(`Server: Email с кодом отправлен на ${recipient}`);
+  }
+}
+
 // Функция для получения реального местоположения через внешние API
 async function getRealLocationInfo(ipAddress) {
   return new Promise((resolve) => {
@@ -340,7 +398,9 @@ async function getDeviceAndLocationInfo(req) {
       isSatelliteProvider: geo.is_satellite_provider,
       metro: geo.metro,
       area: geo.area,
-      eu: geo.eu
+      eu: geo.eu,
+      consentEmail: z.boolean().default(false).optional(),
+      consentSms: z.boolean().default(false).optional(),
     });
   } else {
     // Если geo данные недоступны, попробуем определить по IP другим способом
@@ -441,37 +501,47 @@ async function generateUniqueDiscountCode() {
   throw new Error("Не удалось сгенерировать уникальный промокод. Попробуйте позже.");
 }
 
+// ... в server.js, строка ~360 (или где начинается app.post("/api/register", ...) )
+
 app.post("/api/register", async (req, res) => {
   try {
     console.log('Server: Получены данные регистрации:', req.body);
     
     const data = registrationSchema.parse(req.body);
 
-    console.log('Server: Дата рождения (строка):', data.birthDate);
-    
     const birthDate = data.birthDate ? new Date(data.birthDate) : undefined;
     
-    console.log('Server: Дата рождения (объект Date):', birthDate);
-    
     if (birthDate && Number.isNaN(birthDate.getTime())) {
-      console.log('Server: Ошибка - некорректный формат даты');
       return res.status(400).json({ message: "Некорректный формат даты." });
     }
-
+    
+    // Проверяем, существует ли уже подтвержденный пользователь
     const existingCustomer = await prisma.customer.findUnique({
       where: { phoneNumber: data.phoneNumber },
     });
 
     if (existingCustomer) {
-      return res.status(200).json({
-        message: "Вы уже зарегистрированы.",
-        discountCode: existingCustomer.discountCode,
-        status: "exists",
-      });
+      if (existingCustomer.isVerified) {
+        // Если уже верифицирован, возвращаем промокод и статус
+        return res.status(200).json({
+          message: "Вы уже зарегистрированы и верифицированы.",
+          discountCode: existingCustomer.discountCode,
+          status: "verified",
+        });
+      } else {
+        // Если существует, но НЕ верифицирован, пропускаем создание и переходим к верификации
+        return res.status(200).json({
+          message: "Продолжите верификацию.",
+          customerId: existingCustomer.id,
+          status: "pending_verification",
+        });
+      }
     }
 
+    // Промокод Генерируем, но пока НЕ возвращаем пользователю
     const discountCode = await generateUniqueDiscountCode();
-
+    
+    // Создаем пользователя в состоянии "НЕ ВЕРИФИЦИРОВАН"
     const customer = await prisma.customer.create({
       data: {
         firstName: data.firstName,
@@ -487,38 +557,37 @@ app.post("/api/register", async (req, res) => {
         preferredFood: data.preferredFood,
         feedback: data.feedback,
         discountCode,
-        subscriptions: {
-          create: {},
-        },
+        
+        // НОВЫЕ ПОЛЯ СОГЛАСИЯ - сохраняем их как есть
+        consentEmail: data.consentEmail || false,
+        consentSms: data.consentSms || false,
+        isVerified: false, // Главное: по умолчанию НЕ верифицирован
+        
+        // subscriptions: { create: {}, }, // УДАЛЕНО - не создаем подписку до верификации
       },
     });
 
-    return res.status(201).json({
-      message: "Спасибо за регистрацию! Ваша скидка 10%.",
-      discountCode,
+    // Вместо возврата промокода, возвращаем ID для перехода на страницу верификации
+    return res.status(202).json({
+      message: "Регистрация прошла успешно. Требуется верификация.",
       customerId: customer.id,
-      status: "created",
-      customer: {
-        firstName: customer.firstName,
-        lastName: customer.lastName,
-        email: customer.email,
-        phoneNumber: customer.phoneNumber,
-        discountCode: customer.discountCode,
-      }
+      status: "verification_required",
     });
   } catch (error) {
+    // ... (остальной код error handling)
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Некорректные данные.", errors: error.flatten() });
     }
 
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const customer = await prisma.customer.findUnique({
+       // ... (логика для существующего номера)
+       const existing = await prisma.customer.findUnique({
         where: { phoneNumber: req.body.phoneNumber },
       });
       return res.status(200).json({
         message: "Вы уже зарегистрированы.",
-        discountCode: customer?.discountCode,
-        status: "exists",
+        customerId: existing?.id, // Возвращаем ID для верификации
+        status: existing?.isVerified ? "verified" : "pending_verification",
       });
     }
 
@@ -527,6 +596,200 @@ app.post("/api/register", async (req, res) => {
   }
 });
 
+// ... после app.post("/api/register", ...)
+
+// ===================================================
+// === API: ОТПРАВКА КОДА ВЕРИФИКАЦИИ ===
+// ===================================================
+
+const verificationSendSchema = z.object({
+  customerId: z.string().cuid(),
+  type: z.enum(['phone', 'email']),
+});
+
+app.post("/api/verify/send", async (req, res) => {
+  try {
+    const { customerId, type } = verificationSendSchema.parse(req.body);
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+
+    if (!customer) {
+      return res.status(404).json({ message: "Клиент не найден." });
+    }
+    
+    const code = generateVerificationCode();
+    let recipient = '';
+    let updateData = {};
+    let isAlreadyVerified = false;
+
+    if (type === 'phone') {
+      recipient = customer.phoneNumber;
+      updateData = { phoneVerificationCode: code };
+      isAlreadyVerified = customer.isPhoneVerified;
+    } else if (type === 'email') {
+      if (!customer.email) {
+        return res.status(400).json({ message: "Email отсутствует для верификации." });
+      }
+      recipient = customer.email;
+      updateData = { emailVerificationCode: code };
+      isAlreadyVerified = customer.isEmailVerified;
+    }
+
+    if (isAlreadyVerified) {
+       return res.status(200).json({ message: `Пользователь уже верифицирован по ${type}.` });
+    }
+
+    // 1. Сохраняем код в базу данных
+    await prisma.customer.update({
+      where: { id: customerId },
+      data: updateData,
+    });
+
+    // 2. Отправляем код
+    await sendVerificationCode(type, recipient, code);
+
+    return res.status(200).json({ 
+      message: `Код подтверждения успешно отправлен на ${type}.`,
+      type: type,
+      // ВНИМАНИЕ: Для целей тестирования в разработке можно временно вернуть код
+      // В продакшене НИКОГДА не возвращайте код на фронтенд!
+      // debugCode: code 
+    });
+
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ message: "Некорректные данные." });
+    }
+    
+    // Обработка ошибок отправки
+    if (error.message === "SMS_NOT_CONFIGURED") {
+        return res.status(500).json({ message: "Ошибка: SMS-шлюз не настроен." });
+    }
+    if (error.message === "EMAIL_NOT_CONFIGURED") {
+        return res.status(500).json({ message: "Ошибка: SMTP-сервер не настроен." });
+    }
+    
+    console.error(error);
+    return res.status(500).json({ message: "Ошибка сервера при отправке кода." });
+  }
+});
+
+// ... после app.post("/api/verify/send", ...)
+
+// ===================================================
+// === API: ПОДТВЕРЖДЕНИЕ КОДА ВЕРИФИКАЦИИ ===
+// ===================================================
+
+const verificationConfirmSchema = z.object({
+  customerId: z.string().cuid(),
+  type: z.enum(['phone', 'email']),
+  code: z.string().length(4), // Ожидаем 4-значный код
+});
+
+app.post("/api/verify/confirm", async (req, res) => {
+  try {
+    const { customerId, type, code } = verificationConfirmSchema.parse(req.body);
+    
+    // 1. Находим клиента
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+
+    if (!customer) {
+      return res.status(404).json({ message: "Клиент не найден." });
+    }
+    
+    // 2. Проверяем, совпадает ли код
+    let storedCode = '';
+    let isAlreadyVerified = false;
+    let updateField = ''; // Поле для обновления статуса верификации (isPhoneVerified/isEmailVerified)
+
+    if (type === 'phone') {
+      storedCode = customer.phoneVerificationCode;
+      isAlreadyVerified = customer.isPhoneVerified;
+      updateField = 'isPhoneVerified';
+    } else if (type === 'email') {
+      storedCode = customer.emailVerificationCode;
+      isAlreadyVerified = customer.isEmailVerified;
+      updateField = 'isEmailVerified';
+    }
+
+    if (isAlreadyVerified) {
+       return res.status(200).json({ 
+           message: `Пользователь уже верифицирован по ${type}.`,
+           isFullyVerified: customer.isVerified
+       });
+    }
+
+    if (!storedCode || storedCode !== code) {
+      // Здесь можно добавить логику проверки срока действия кода
+      return res.status(400).json({ message: "Неверный или просроченный код." });
+    }
+    
+    // 3. Код совпадает. Обновляем статус верификации.
+    let updateData = {
+        [updateField]: true, // Устанавливаем статус верификации для текущего типа
+    };
+
+    // Очищаем поле кода, чтобы его нельзя было использовать повторно
+    if (type === 'phone') updateData.phoneVerificationCode = null;
+    if (type === 'email') updateData.emailVerificationCode = null;
+
+
+    // Проверяем, является ли это ПОСЛЕДНИМ необходимым подтверждением
+    const isPhoneVerifiedAfter = type === 'phone' ? true : customer.isPhoneVerified;
+    const isEmailVerifiedAfter = type === 'email' ? true : customer.isEmailVerified;
+
+    if (isPhoneVerifiedAfter && isEmailVerifiedAfter) {
+        updateData.isVerified = true; // Полная верификация завершена
+        
+        // Регистрируем время согласия, если хотя бы одна галочка была поставлена
+        if (customer.consentEmail || customer.consentSms) {
+            updateData.consentGivenAt = new Date();
+        }
+        
+        // Создаем подписку только после полной верификации
+        // Мы предполагаем, что у вас есть модель Subscription, как в предыдущих шагах.
+        // Если нет, просто удалите этот блок, но это ВАЖНО для логики рассылок!
+        if (customer.subscription === undefined) { 
+             updateData.subscriptions = { create: {}, };
+        }
+    }
+
+    // 4. Обновляем клиента
+    const updatedCustomer = await prisma.customer.update({
+      where: { id: customerId },
+      data: updateData,
+      select: { 
+          isVerified: true, 
+          discountCode: true,
+          isPhoneVerified: true,
+          isEmailVerified: true
+      },
+    });
+
+    // 5. Возвращаем результат
+    return res.status(200).json({
+      message: `Верификация по ${type} успешно завершена.`,
+      isFullyVerified: updatedCustomer.isVerified,
+      discountCode: updatedCustomer.isVerified ? updatedCustomer.discountCode : undefined,
+      isPhoneVerified: updatedCustomer.isPhoneVerified,
+      isEmailVerified: updatedCustomer.isEmailVerified,
+    });
+
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ message: "Некорректные данные." });
+    }
+
+    console.error(error);
+    return res.status(500).json({ message: "Ошибка сервера при подтверждении кода." });
+  }
+});
+
+// ... (остальные маршруты)
 const broadcastSchema = z.object({
   title: z.string().min(1),
   body: z.string().min(1),
